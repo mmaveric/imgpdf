@@ -1,0 +1,507 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+<title>imgpdf — прототип дизайна</title>
+<!--
+  ДИЗАЙН-КОНЦЕПЦИЯ: сканер + контактный лист.
+  Palette: bed(стекло) / paper / ink / ink-quiet / scan(луч сканера, teal) / chassis(корпус устройства) / danger.
+  Type: ui-monospace для лейблов/номеров кадров/показаний (ЖК-панель сканера), system-sans для текста.
+  Signature: scan-beam — бегущий луч; hover на зоне загрузки + зацикленный во время генерации PDF.
+  Структурный приём: номер кадра на миниатюре = реальный порядок страницы в PDF (не декоративная нумерация).
+  Брейкпоинт здесь — CSS container query (~640px), а не @media, специально ради тумблера
+  "Телефон/Десктоп" в панели ревьюера ниже. В проде (см. SPEC §8) будет обычный @media (min-width:768px) —
+  контейнерные запросы там не нужны, реальный вьюпорт телефона и так телефонный.
+-->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Sortable/1.15.2/Sortable.min.js"></script>
+<script defer src="https://cdnjs.cloudflare.com/ajax/libs/alpinejs/3.14.1/cdn.min.js"></script>
+<style>
+:root{
+  --bed:#E7EBEC; --paper:#FFFFFF; --paper-2:#F1F4F4;
+  --ink:#171B1E; --ink-quiet:#6D767B; --line:#D3DADC;
+  --scan:#0E9C94; --scan-dark:#0B7F79; --scan-soft:#D9F0EE;
+  --chassis:#21262A; --chassis-2:#2C3236;
+  --danger:#C4501F; --danger-soft:#F6E1D5;
+
+  --radius-sm:4px; --radius-md:8px; --radius-lg:14px; --radius-xl:22px;
+  --shadow-sm:0 1px 2px rgba(20,24,26,.10);
+  --shadow-md:0 3px 10px rgba(20,24,26,.14);
+  --shadow-lg:0 18px 44px rgba(15,18,20,.34);
+
+  --font-mono: ui-monospace, 'SF Mono', 'Cascadia Mono', 'Roboto Mono', Consolas, monospace;
+  --font-ui: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+
+  --sp-1:4px; --sp-2:8px; --sp-3:12px; --sp-4:16px; --sp-5:24px; --sp-6:32px; --sp-7:48px;
+  --tap:44px;
+}
+*{box-sizing:border-box;}
+html,body{margin:0;padding:0;}
+[x-cloak]{display:none!important;}
+body{font-family:var(--font-ui); color:var(--ink); background:#DADFE0; -webkit-font-smoothing:antialiased;}
+button{font-family:inherit; font-size:inherit; color:inherit;}
+svg{display:block;}
+::selection{background:var(--scan-soft);}
+
+/* ---------- reviewer chrome (только для этого прототипа) ---------- */
+.reviewer-bar{
+  position:sticky; top:0; z-index:100; background:var(--chassis); color:#C7D0D3;
+  font-family:var(--font-mono); font-size:11px; letter-spacing:.02em;
+  display:flex; flex-wrap:wrap; gap:var(--sp-3); align-items:center; justify-content:space-between;
+  padding:var(--sp-2) var(--sp-4);
+}
+.reviewer-left{display:flex; align-items:center; gap:8px; flex-wrap:wrap;}
+.reviewer-label{opacity:.6;}
+.reviewer-group{display:inline-flex; gap:2px; background:var(--chassis-2); padding:3px; border-radius:var(--radius-sm);}
+.reviewer-group button{padding:5px 9px; border:none; background:transparent; color:inherit; border-radius:3px; cursor:pointer; opacity:.6; font-family:inherit;}
+.reviewer-group button.active{background:var(--scan); opacity:1; color:#fff;}
+
+.frame-wrapper{display:flex; justify-content:center; padding:var(--sp-6) var(--sp-4); min-height:calc(100vh - 40px);}
+.app-shell{
+  container-type:inline-size; background:var(--bed); width:100%; max-width:1040px;
+  border-radius:var(--radius-lg); overflow:hidden; min-height:640px;
+  display:flex; flex-direction:column; box-shadow:var(--shadow-md);
+}
+.frame-mobile .app-shell{
+  width:390px; height:800px; min-height:0;
+  border:10px solid var(--chassis); border-radius:44px; box-shadow:var(--shadow-lg);
+}
+
+/* ---------- header ---------- */
+.app-header{
+  display:flex; align-items:center; justify-content:space-between;
+  padding:var(--sp-4) var(--sp-5); background:var(--paper-2); border-bottom:1px solid var(--line); flex-shrink:0;
+}
+.brand{display:flex; align-items:center; gap:9px;}
+.led{width:8px; height:8px; border-radius:2px; background:var(--scan); box-shadow:0 0 0 3px var(--scan-soft);}
+.brand-mark{font-family:var(--font-mono); font-size:15px; font-weight:600; letter-spacing:.05em;}
+.brand-tag{font-family:var(--font-mono); font-size:10px; letter-spacing:.08em; text-transform:uppercase; color:var(--ink-quiet); display:none;}
+.header-meta{display:flex; align-items:center; gap:var(--sp-4); font-size:13px; color:var(--ink-quiet);}
+.link-btn{background:none; border:none; color:var(--danger); cursor:pointer; padding:8px 0; font-size:13px; font-family:var(--font-mono);}
+
+/* ---------- buttons ---------- */
+.panel-btn{
+  display:flex; align-items:center; justify-content:center; gap:10px; min-height:52px;
+  border-radius:var(--radius-sm); border:1px solid var(--line); background:var(--paper);
+  font-size:15px; font-weight:600; cursor:pointer; color:var(--ink); box-shadow:0 2px 0 var(--line);
+  transition:transform .08s, box-shadow .08s;
+}
+.panel-btn:active{box-shadow:none; transform:translateY(2px);}
+.panel-btn--primary{background:var(--scan); border-color:var(--scan-dark); color:#fff; box-shadow:0 2px 0 var(--scan-dark);}
+.panel-btn:disabled{opacity:.45; cursor:not-allowed;}
+.panel-btn-row{display:flex; gap:var(--sp-3);}
+.panel-btn-row .panel-btn{flex:1;}
+.icon-btn{
+  width:34px; height:34px; display:inline-flex; align-items:center; justify-content:center;
+  border-radius:var(--radius-sm); border:none; background:var(--paper-2); cursor:pointer; color:var(--ink-quiet);
+}
+.icon-btn:hover{background:var(--scan-soft); color:var(--scan-dark);}
+
+/* ---------- empty state ---------- */
+.screen-empty{flex:1; display:flex; flex-direction:column; padding:var(--sp-6) var(--sp-5); gap:var(--sp-5); justify-content:center; overflow-y:auto;}
+.empty-mobile-actions{display:flex; flex-direction:column; gap:var(--sp-3); max-width:340px; margin:0 auto; width:100%;}
+.empty-or{text-align:center; color:var(--ink-quiet); font-size:12px; font-family:var(--font-mono); text-transform:uppercase; letter-spacing:.06em;}
+.scan-bed{
+  display:none; position:relative; overflow:hidden; border:1px solid var(--line);
+  border-radius:var(--radius-md); background:var(--paper); cursor:pointer; max-width:520px; margin:0 auto; width:100%;
+}
+.ruler{
+  height:14px; background-image:repeating-linear-gradient(90deg, var(--line) 0 1px, transparent 1px 8px);
+  background-position:0 100%; border-bottom:1px solid var(--line);
+}
+.scan-bed-inner{padding:var(--sp-7) var(--sp-5); text-align:center;}
+.scan-bed-title{font-size:16px; font-weight:600; margin:0 0 4px;}
+.scan-bed-sub{font-size:13px; color:var(--ink-quiet); margin:0;}
+.scan-bed-hint{font-family:var(--font-mono); font-size:10px; color:var(--ink-quiet); margin-top:var(--sp-3); letter-spacing:.03em;}
+.scan-beam-hover{
+  position:absolute; left:-4px; right:-4px; height:3px; top:0;
+  background:linear-gradient(90deg, transparent, var(--scan), transparent);
+  box-shadow:0 0 12px 1px var(--scan); opacity:0; pointer-events:none;
+}
+.scan-bed:hover .scan-beam-hover{animation:scanSweep 1.1s ease-in-out;}
+@keyframes scanSweep{0%{top:0;opacity:0;}8%{opacity:1;}92%{opacity:1;}100%{top:100%;opacity:0;}}
+
+@container (min-width:640px){
+  .empty-mobile-actions{display:none;}
+  .empty-or{display:none;}
+  .scan-bed{display:block;}
+}
+
+/* ---------- grid screen ---------- */
+.screen-grid{flex:1; display:flex; flex-direction:column; min-height:0;}
+.grid-body{flex:1; display:flex; min-height:0;}
+.grid-main{flex:1; overflow-y:auto; padding:2px; min-height:0;}
+.thumb-grid{display:grid; grid-template-columns:repeat(auto-fill, minmax(104px,1fr)); gap:2px; background:var(--line);}
+.thumb-card{position:relative; background:var(--paper); cursor:grab;}
+.thumb-card.sortable-ghost{opacity:.35;}
+.thumb-card.sortable-chosen{box-shadow:var(--shadow-md); z-index:5;}
+.thumb-image{aspect-ratio:1; position:relative; display:flex; align-items:center; justify-content:center; transition:transform .2s ease; overflow:hidden;}
+.thumb-image svg{opacity:.3; width:28px; height:28px;}
+.frame-no{
+  position:absolute; top:0; left:0; z-index:2; font-family:var(--font-mono); font-size:10px;
+  background:var(--chassis); color:var(--paper); padding:2px 6px; border-radius:0 0 5px 0;
+}
+.thumb-progress{position:absolute; left:14%; right:14%; bottom:10px; height:3px; background:rgba(255,255,255,.55); border-radius:2px; overflow:hidden;}
+.thumb-progress-bar{height:100%; background:#fff; transition:width .15s linear;}
+.thumb-footer{display:flex; align-items:center; justify-content:space-between; padding:4px 6px; border-top:1px solid var(--line); gap:6px;}
+.thumb-name{font-family:var(--font-mono); font-size:10px; color:var(--ink-quiet); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+.thumb-actions{display:flex; gap:2px; flex-shrink:0;}
+.thumb-actions button{width:24px; height:24px; border:none; background:transparent; border-radius:var(--radius-sm); cursor:pointer; display:flex; align-items:center; justify-content:center; color:var(--ink-quiet);}
+.thumb-actions button:hover{background:var(--scan-soft); color:var(--scan-dark);}
+.thumb-actions button.danger:hover{background:var(--danger-soft); color:var(--danger);}
+.thumb-add{
+  aspect-ratio:1; border:none; background:var(--paper-2); display:flex; flex-direction:column; align-items:center;
+  justify-content:center; gap:4px; cursor:pointer; color:var(--ink-quiet); font-family:var(--font-mono); font-size:10px;
+}
+.thumb-add:hover{background:var(--scan-soft); color:var(--scan-dark);}
+
+.action-bar{display:flex; gap:var(--sp-3); padding:var(--sp-3) var(--sp-4); background:var(--paper-2); border-top:1px solid var(--line); flex-shrink:0;}
+.action-bar .panel-btn:first-child{flex:0 0 auto; padding:0 16px;}
+.action-bar .panel-btn--primary{flex:1;}
+
+/* ---------- settings ---------- */
+.settings-backdrop{position:fixed; inset:0; background:rgba(23,27,30,.45); z-index:35;}
+.settings-panel{
+  position:fixed; left:0; right:0; bottom:0; z-index:40; background:var(--paper);
+  border-radius:var(--radius-xl) var(--radius-xl) 0 0; box-shadow:var(--shadow-lg);
+  max-height:82vh; overflow-y:auto; transform:translateY(100%); transition:transform .28s cubic-bezier(.32,.72,0,1);
+}
+.settings-panel.open{transform:translateY(0);}
+.settings-sheet-handle{width:36px; height:4px; background:var(--line); border-radius:2px; margin:10px auto 0;}
+.settings-header{display:flex; align-items:center; justify-content:space-between; padding:var(--sp-4) var(--sp-5) var(--sp-2);}
+.settings-header h2{font-family:var(--font-mono); font-size:13px; letter-spacing:.06em; text-transform:uppercase; margin:0;}
+.settings-body{padding:0 var(--sp-5) var(--sp-6); display:flex; flex-direction:column; gap:var(--sp-5);}
+.field{display:flex; flex-direction:column; gap:6px;}
+.field label{font-family:var(--font-mono); font-size:10px; font-weight:600; letter-spacing:.08em; text-transform:uppercase; color:var(--ink-quiet);}
+.field select, .field input[type=text]{
+  height:var(--tap); border-radius:var(--radius-sm); border:1px solid var(--line); padding:0 12px;
+  font-size:15px; background:var(--paper); color:var(--ink);
+}
+.segmented{display:flex; border:1px solid var(--line); border-radius:var(--radius-sm); overflow:hidden;}
+.segmented button{flex:1; border:none; background:var(--paper); padding:10px; cursor:pointer; font-family:var(--font-mono); font-size:12px; color:var(--ink-quiet);}
+.segmented button.active{background:var(--scan); color:#fff;}
+.stepper{display:flex; align-items:center; border:1px solid var(--line); border-radius:var(--radius-sm); height:var(--tap);}
+.stepper button{width:40px; height:100%; border:none; background:transparent; font-size:18px; cursor:pointer; color:var(--ink-quiet);}
+.stepper span{flex:1; text-align:center; font-family:var(--font-mono); font-size:14px;}
+input[type=range]{width:100%; accent-color:var(--scan);}
+
+@container (min-width:640px){
+  .settings-backdrop{display:none;}
+  .settings-panel{
+    position:static; transform:none; width:300px; flex:0 0 300px; border-radius:0;
+    max-height:none; box-shadow:none; border-left:1px solid var(--line);
+  }
+  .settings-sheet-handle{display:none;}
+  .settings-header .icon-btn{display:none;}
+  .grid-body{flex-direction:row;}
+  .action-bar .panel-btn:first-child{display:none;}
+  .brand-tag{display:inline;}
+}
+
+/* ---------- result / scan-stage (signature) ---------- */
+.screen-result{flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; padding:var(--sp-6); gap:var(--sp-5); text-align:center; overflow-y:auto;}
+.page-stack{position:relative; width:110px; height:140px; margin:0 auto;}
+.page{position:absolute; inset:0; background:var(--paper); border:1px solid var(--line); border-radius:3px; box-shadow:var(--shadow-sm);}
+.scan-beam-active{
+  position:absolute; left:-4px; right:-4px; height:3px; top:0;
+  background:linear-gradient(90deg, transparent, var(--scan), transparent);
+  box-shadow:0 0 14px 2px var(--scan); animation:scanLoop 1.4s ease-in-out infinite;
+}
+@keyframes scanLoop{0%{top:0;}50%{top:calc(100% - 3px);}100%{top:0;}}
+.stamp{position:absolute; inset:0; display:flex; align-items:center; justify-content:center; color:var(--scan-dark);}
+.scan-readout{font-family:var(--font-mono); font-size:20px; letter-spacing:.05em; margin-top:var(--sp-4);}
+.result-title{font-size:17px; font-weight:700; margin:0;}
+.result-sub{color:var(--ink-quiet); font-size:13px; margin:4px 0 0; font-family:var(--font-mono);}
+.result-actions{display:flex; flex-direction:column; gap:var(--sp-3); width:100%; max-width:320px;}
+@container (min-width:640px){ .result-actions{flex-direction:row;} }
+
+/* ---------- рекламные блоки: доп. часть, визуально отделена штриховкой от функционального UI ---------- */
+.ad-slot{
+  position:relative; display:flex; align-items:center; justify-content:center;
+  background-image:repeating-linear-gradient(45deg, var(--paper-2) 0 8px, var(--paper) 8px 16px);
+  border:1px solid var(--line); overflow:hidden; flex-shrink:0;
+}
+.ad-slot-label{
+  position:absolute; top:5px; left:7px; font-family:var(--font-mono); font-size:8px;
+  letter-spacing:.1em; text-transform:uppercase; color:var(--ink-quiet); opacity:.55;
+}
+.ad-slot-caption{font-family:var(--font-mono); font-size:11px; color:var(--ink-quiet); opacity:.5;}
+.ad-slot--rect{width:100%; max-width:300px; height:170px; margin:var(--sp-5) auto 0; border-radius:var(--radius-sm);}
+.ad-slot--sidebar{display:none;}
+.ad-slot--footer{height:52px; border-left:none; border-right:none; border-bottom:none; margin:0;}
+@container (min-width:640px){ .ad-slot--sidebar{display:flex;} }
+</style>
+</head>
+<body>
+
+<div x-data="app()" x-cloak>
+
+  <div class="reviewer-bar">
+    <div class="reviewer-left">
+      <span class="reviewer-label">прототип · экран:</span>
+      <span class="reviewer-group">
+        <button :class="{active:view==='empty'}" @click="resetEmpty()">пусто</button>
+        <button :class="{active:view==='grid' && !settingsOpen}" @click="ensureGrid(); settingsOpen=false">грид</button>
+        <button :class="{active:settingsOpen}" @click="ensureGrid(); settingsOpen=true">настройки</button>
+        <button :class="{active:view==='result'}" @click="ensureGrid(); startGenerate()">результат</button>
+      </span>
+    </div>
+    <div class="reviewer-group">
+      <button :class="{active:frame==='mobile'}" @click="frame='mobile'">📱 телефон</button>
+      <button :class="{active:frame==='desktop'}" @click="frame='desktop'">🖥 десктоп</button>
+      <button :class="{active:frame==='auto'}" @click="frame='auto'">авто</button>
+    </div>
+  </div>
+
+  <div class="frame-wrapper" :class="'frame-'+frame">
+    <div class="app-shell">
+
+      <header class="app-header">
+        <div class="brand">
+          <span class="led"></span>
+          <span class="brand-mark">imgpdf</span>
+          <span class="brand-tag">скан → pdf</span>
+        </div>
+        <div class="header-meta" x-show="view==='grid'">
+          <span x-text="images.length + ' изобр.'"></span>
+          <button class="link-btn" @click="clearAll()">очистить</button>
+        </div>
+      </header>
+
+      <!-- EMPTY -->
+      <template x-if="view==='empty'">
+        <div class="screen-empty">
+          <div class="empty-mobile-actions">
+            <button class="panel-btn panel-btn--primary" @click="addMock(1)">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 9a2 2 0 0 1 2-2h1l1.5-2h9L18 7h1a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/><circle cx="12" cy="13" r="3.5"/></svg>
+              Камера
+            </button>
+            <button class="panel-btn" @click="addMock(3)">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="14" height="14" rx="1.5"/><path d="M7 21h14V7"/></svg>
+              Галерея
+            </button>
+          </div>
+          <p class="empty-or">или на десктопе ↓</p>
+          <div class="scan-bed" @click="addMock(4)">
+            <div class="ruler"></div>
+            <div class="scan-bed-inner">
+              <p class="scan-bed-title">Перетащите изображения сюда</p>
+              <p class="scan-bed-sub">или нажмите, чтобы выбрать файлы</p>
+              <p class="scan-bed-hint">JPEG · PNG · WEBP · HEIC — до 200 файлов</p>
+            </div>
+            <div class="scan-beam-hover"></div>
+          </div>
+          <div class="ad-slot ad-slot--rect">
+            <span class="ad-slot-label">реклама</span>
+            <span class="ad-slot-caption">300 × 250</span>
+          </div>
+        </div>
+      </template>
+
+      <!-- GRID -->
+      <template x-if="view==='grid'">
+        <div class="screen-grid">
+          <div class="grid-body">
+            <div class="grid-main">
+              <div class="thumb-grid">
+                <div style="display:contents" id="imageGrid">
+                  <template x-for="(img, idx) in images" :key="img.id">
+                    <div class="thumb-card">
+                      <div class="thumb-image" :style="'transform:rotate('+img.rotation+'deg); background:linear-gradient(135deg, hsl('+img.hue+' 30% 90%), hsl('+img.hue+' 22% 76%));'">
+                        <span class="frame-no" x-text="String(idx+1).padStart(2,'0')"></span>
+                        <template x-if="img.uploading">
+                          <div class="thumb-progress"><div class="thumb-progress-bar" :style="'width:'+img.progress+'%'"></div></div>
+                        </template>
+                        <template x-if="!img.uploading">
+                          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="8.5" cy="10.5" r="1.5"/><path d="m21 15-5-5L5 19"/></svg>
+                        </template>
+                      </div>
+                      <div class="thumb-footer">
+                        <span class="thumb-name" x-text="img.name"></span>
+                        <div class="thumb-actions">
+                          <button @click="rotateImage(img.id)" aria-label="Повернуть">
+                            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 1 1-3-6.7"/><path d="M21 4v5h-5"/></svg>
+                          </button>
+                          <button class="danger" @click="removeImage(img.id)" aria-label="Удалить">
+                            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h16"/><path d="M6 7V4h12v3M8 7v12M16 7v12M6 7l1 13h10l1-13"/></svg>
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  </template>
+                </div>
+                <button class="thumb-add" @click="addMock(1)">
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 5v14M5 12h14"/></svg>
+                  добавить
+                </button>
+              </div>
+            </div>
+
+            <aside class="settings-panel" :class="{open:settingsOpen}">
+              <div class="settings-sheet-handle"></div>
+              <div class="settings-header">
+                <h2>Настройки PDF</h2>
+                <button class="icon-btn" @click="settingsOpen=false" aria-label="Закрыть">
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6 6 18"/></svg>
+                </button>
+              </div>
+              <div class="settings-body">
+                <div class="field">
+                  <label>Формат страницы</label>
+                  <select x-model="settings.page">
+                    <option value="a4">A4</option>
+                    <option value="letter">Letter</option>
+                    <option value="auto">По размеру фото</option>
+                  </select>
+                </div>
+                <div class="field">
+                  <label>Ориентация</label>
+                  <select x-model="settings.orientation">
+                    <option value="auto">Авто (по фото)</option>
+                    <option value="portrait">Портрет</option>
+                    <option value="landscape">Альбом</option>
+                  </select>
+                </div>
+                <div class="field">
+                  <label>Режим вписывания</label>
+                  <div class="segmented">
+                    <button :class="{active:settings.fit==='fit'}" @click="settings.fit='fit'">Fit</button>
+                    <button :class="{active:settings.fit==='fill'}" @click="settings.fit='fill'">Fill</button>
+                  </div>
+                </div>
+                <div class="field">
+                  <label>Поля, мм</label>
+                  <div class="stepper">
+                    <button @click="settings.margin=Math.max(0,settings.margin-2)">−</button>
+                    <span x-text="settings.margin"></span>
+                    <button @click="settings.margin=Math.min(30,settings.margin+2)">+</button>
+                  </div>
+                </div>
+                <div class="field">
+                  <label>Качество JPEG: <span x-text="settings.quality"></span></label>
+                  <input type="range" min="50" max="100" step="5" x-model.number="settings.quality">
+                </div>
+                <div class="field">
+                  <label>Имя файла</label>
+                  <input type="text" x-model="settings.filename" placeholder="scan">
+                </div>
+                <div class="ad-slot ad-slot--rect ad-slot--sidebar">
+                  <span class="ad-slot-label">реклама</span>
+                  <span class="ad-slot-caption">300 × 250</span>
+                </div>
+              </div>
+            </aside>
+            <div class="settings-backdrop" x-show="settingsOpen" @click="settingsOpen=false"></div>
+          </div>
+
+          <div class="action-bar">
+            <button class="panel-btn" @click="settingsOpen=true">⚙</button>
+            <button class="panel-btn panel-btn--primary" :disabled="images.length===0" @click="startGenerate()">Создать PDF →</button>
+          </div>
+        </div>
+      </template>
+
+      <!-- RESULT -->
+      <template x-if="view==='result'">
+        <div class="screen-result">
+          <div class="page-stack">
+            <span class="page" style="transform:translate(0,0) rotate(0deg)"></span>
+            <span class="page" style="transform:translate(3px,-3px) rotate(-1.5deg)"></span>
+            <span class="page" style="transform:translate(6px,-6px) rotate(-3deg)"></span>
+            <template x-if="!job.finished"><div class="scan-beam-active"></div></template>
+            <template x-if="job.finished">
+              <div class="stamp">
+                <svg width="46" height="46" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="12" cy="12" r="10"/><path d="m8 12 3 3 5-6"/></svg>
+              </div>
+            </template>
+          </div>
+          <p class="scan-readout" x-text="job.finished ? 'ГОТОВО' : String(job.done).padStart(2,'0')+' / '+String(job.total).padStart(2,'0')"></p>
+          <div>
+            <p class="result-title" x-text="job.finished ? 'PDF готов' : 'Сканируем страницы…'"></p>
+            <p class="result-sub" x-text="job.finished ? (settings.filename+'.pdf · '+job.total+' стр. · '+pageLabel) : 'обрабатываем по порядку'"></p>
+          </div>
+          <div class="result-actions" x-show="job.finished">
+            <button class="panel-btn" @click="view='grid'">Создать ещё раз</button>
+            <button class="panel-btn panel-btn--primary">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v12m0 0-4-4m4 4 4-4M4 21h16"/></svg>
+              Скачать PDF
+            </button>
+          </div>
+        </div>
+      </template>
+
+      <div class="ad-slot ad-slot--footer">
+        <span class="ad-slot-label">реклама</span>
+        <span class="ad-slot-caption">баннер</span>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+<script>
+function app(){
+  return {
+    view:'empty', frame:'auto', settingsOpen:false,
+    images:[], nextId:1,
+    settings:{page:'a4', orientation:'auto', margin:10, fit:'fit', quality:85, filename:'scan'},
+    job:{done:0,total:0,finished:false},
+    hues:[15,150,205,265,335,45,95,255],
+
+    ensureGrid(){ if(this.images.length===0){ this.addMock(3,false);} this.view='grid'; },
+    resetEmpty(){ this.images=[]; this.view='empty'; this.settingsOpen=false; },
+
+    addMock(count, switchView=true){
+      const startLen=this.images.length;
+      for(let i=0;i<count;i++){
+        const id=this.nextId++;
+        this.images.push({id, name:'IMG_'+(2400+id)+'.jpg', rotation:0, hue:this.hues[(id-1)%this.hues.length], progress:0, uploading:true});
+      }
+      if(switchView){ this.view='grid'; }
+      this.$nextTick(()=>this.initSortable());
+      this.images.slice(startLen).forEach((img,idx)=>{
+        let p=0;
+        const t=setInterval(()=>{
+          p+=25+Math.random()*25;
+          const target=this.images.find(x=>x.id===img.id);
+          if(!target){clearInterval(t);return;}
+          target.progress=Math.min(100,Math.round(p));
+          if(target.progress>=100){target.uploading=false;clearInterval(t);}
+        }, 160+idx*70);
+      });
+    },
+    removeImage(id){ this.images=this.images.filter(x=>x.id!==id); if(this.images.length===0){this.view='empty';} },
+    rotateImage(id){ const img=this.images.find(x=>x.id===id); if(img) img.rotation=(img.rotation+90)%360; },
+    clearAll(){ this.images=[]; this.view='empty'; this.settingsOpen=false; },
+
+    initSortable(){
+      const grid=document.getElementById('imageGrid');
+      if(!grid || grid._init) return;
+      grid._init=true;
+      Sortable.create(grid,{
+        animation:150, delay:150, delayOnTouchOnly:true,
+        onEnd:(evt)=>{
+          if(evt.oldIndex===evt.newIndex) return;
+          const moved=this.images.splice(evt.oldIndex,1)[0];
+          this.images.splice(evt.newIndex,0,moved);
+        }
+      });
+    },
+
+    startGenerate(){
+      if(this.images.length===0) return;
+      this.settingsOpen=false;
+      this.view='result';
+      this.job={done:0,total:this.images.length,finished:false};
+      const step=()=>{
+        if(this.job.done>=this.job.total){ this.job.finished=true; return; }
+        setTimeout(()=>{ this.job.done++; step(); }, 300+Math.random()*200);
+      };
+      step();
+    },
+    get pageLabel(){ return {a4:'A4', letter:'Letter', auto:'по фото'}[this.settings.page]; }
+  }
+}
+</script>
+</body>
+</html>
