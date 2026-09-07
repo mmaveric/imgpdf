@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+<title>imgpdf</title>
+<link rel="stylesheet" href="styles.css" />
+<script src="vendor/sortable.min.js"></script>
+<script type="module" src="app.js"></script>
+</head>
+<body>
+
+<div x-data="app" x-cloak class="app-shell"
+     @dragover.prevent="dropActive = true"
+     @dragleave.prevent="dropActive = false"
+     @drop.prevent="onDrop($event)">
+
+  <input type="file" accept="image/*" multiple x-ref="galleryInput" @change="onPicked($event)" hidden>
+  <input type="file" accept="image/*" capture="environment" x-ref="cameraInput" @change="onPicked($event)" hidden>
+
+  <header class="app-header">
+    <div class="brand" role="button" tabindex="0" @click="goHome()" @keydown.enter="goHome()">
+      <span class="led"></span>
+      <span class="brand-mark">imgpdf</span>
+      <span class="brand-tag">скан → pdf</span>
+    </div>
+    <div class="header-meta" x-show="view==='grid' && !unsupported">
+      <span x-text="images.length + ' изобр.'"></span>
+      <button class="link-btn" @click="clearAll()">очистить</button>
+    </div>
+  </header>
+
+  <!-- НЕПОДДЕРЖИВАЕМЫЙ БРАУЗЕР -->
+  <template x-if="unsupported">
+    <div class="screen-unsupported">
+      <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="12" cy="12" r="10"/><path d="M12 8v5"/><path d="M12 16.5v.5"/></svg>
+      <h2>Браузер не поддерживается</h2>
+      <p>Для работы нужен iOS Safari 16.4+ или актуальный Chrome / Firefox / Safari. Обновите браузер или откройте страницу с другого устройства.</p>
+    </div>
+  </template>
+
+  <!-- EMPTY -->
+  <template x-if="!unsupported && view==='empty'">
+    <div class="screen-empty">
+      <div class="empty-mobile-actions">
+        <button class="panel-btn panel-btn--primary" @click="pickCamera()">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 9a2 2 0 0 1 2-2h1l1.5-2h9L18 7h1a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/><circle cx="12" cy="13" r="3.5"/></svg>
+          Камера
+        </button>
+        <button class="panel-btn" @click="pickGallery()">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="14" height="14" rx="1.5"/><path d="M7 21h14V7"/></svg>
+          Галерея
+        </button>
+      </div>
+      <p class="empty-or">или на десктопе ↓</p>
+      <div class="scan-bed" :class="{'drop-active': dropActive}" @click="pickGallery()">
+        <div class="ruler"></div>
+        <div class="scan-bed-inner">
+          <p class="scan-bed-title">Перетащите изображения сюда</p>
+          <p class="scan-bed-sub">или нажмите, чтобы выбрать файлы</p>
+          <p class="scan-bed-hint">JPEG · PNG · WEBP — до 200 файлов</p>
+        </div>
+        <div class="scan-beam-hover"></div>
+      </div>
+      <div class="ad-slot ad-slot--rect">
+        <span class="ad-slot-label">реклама</span>
+        <span class="ad-slot-caption">300 × 250</span>
+      </div>
+    </div>
+  </template>
+
+  <!-- GRID -->
+  <template x-if="!unsupported && view==='grid'">
+    <div class="screen-grid">
+      <template x-if="genError">
+        <div class="queue-banner" x-text="genError"></div>
+      </template>
+      <template x-if="!genError && limitMsg">
+        <div class="queue-banner" x-text="limitMsg"></div>
+      </template>
+      <template x-if="!genError && !limitMsg && queueWarn">
+        <div class="queue-banner">Больше 100 файлов — на слабом устройстве может не хватить памяти</div>
+      </template>
+      <div class="grid-body">
+        <div class="grid-main">
+          <div class="thumb-grid">
+            <div style="display:contents" id="imageGrid" x-init="initSortable($el)">
+              <template x-for="(img, idx) in images" :key="img.id">
+                <div class="thumb-card">
+                  <div class="thumb-image"
+                       :class="{'thumb-image--error': img.status==='error'}"
+                       :style="img.status==='ready' ? 'transform:rotate('+img.rotation+'deg)' : ''">
+                    <span class="frame-no" x-text="String(idx+1).padStart(2,'0')"></span>
+                    <template x-if="img.status==='ready'">
+                      <img :src="img.thumbUrl" alt="">
+                    </template>
+                    <template x-if="img.status==='processing'">
+                      <div class="thumb-progress thumb-progress--busy"><div class="thumb-progress-bar"></div></div>
+                    </template>
+                    <template x-if="img.status==='error'">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 8v5"/><path d="M12 16.5v.5"/></svg>
+                    </template>
+                    <template x-if="img.status==='error'">
+                      <span class="thumb-error-text" x-text="errorText(img.error)"></span>
+                    </template>
+                  </div>
+                  <div class="thumb-footer">
+                    <span class="thumb-name" x-text="img.name"></span>
+                    <div class="thumb-actions">
+                      <button x-show="img.status==='ready'" @click="rotateImage(img.id)" aria-label="Повернуть">
+                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 1 1-3-6.7"/><path d="M21 4v5h-5"/></svg>
+                      </button>
+                      <button class="danger" @click="removeImage(img.id)" aria-label="Удалить">
+                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h16"/><path d="M6 7V4h12v3M8 7v12M16 7v12M6 7l1 13h10l1-13"/></svg>
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </template>
+            </div>
+            <button class="thumb-add" @click="pickGallery()">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 5v14M5 12h14"/></svg>
+              добавить
+            </button>
+          </div>
+        </div>
+
+        <aside class="settings-panel" :class="{open:settingsOpen}">
+          <div class="settings-sheet-handle"></div>
+          <div class="settings-header">
+            <h2>Настройки PDF</h2>
+            <button class="icon-btn" @click="settingsOpen=false" aria-label="Закрыть">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6 6 18"/></svg>
+            </button>
+          </div>
+          <div class="settings-body">
+            <div class="field">
+              <label>Формат страницы</label>
+              <select x-model="settings.page">
+                <option value="a4">A4</option>
+                <option value="letter">Letter</option>
+                <option value="auto">По размеру фото</option>
+              </select>
+            </div>
+            <div class="field">
+              <label>Ориентация</label>
+              <select x-model="settings.orientation">
+                <option value="auto">Авто (по фото)</option>
+                <option value="portrait">Портрет</option>
+                <option value="landscape">Альбом</option>
+              </select>
+            </div>
+            <div class="field">
+              <label>Режим вписывания</label>
+              <div class="segmented">
+                <button :class="{active:settings.fit==='fit'}" @click="settings.fit='fit'">Fit</button>
+                <button :class="{active:settings.fit==='fill'}" @click="settings.fit='fill'">Fill</button>
+              </div>
+            </div>
+            <div class="field">
+              <label>Поля, мм</label>
+              <div class="stepper">
+                <button @click="settings.margin=Math.max(0,settings.margin-2)">−</button>
+                <span x-text="settings.margin"></span>
+                <button @click="settings.margin=Math.min(30,settings.margin+2)">+</button>
+              </div>
+            </div>
+            <div class="field">
+              <label>Качество JPEG: <span x-text="settings.quality"></span></label>
+              <input type="range" min="50" max="100" step="5" x-model.number="settings.quality">
+            </div>
+            <div class="field">
+              <label>Имя файла</label>
+              <input type="text" x-model="settings.filename" placeholder="scan">
+            </div>
+            <div class="ad-slot ad-slot--rect ad-slot--sidebar">
+              <span class="ad-slot-label">реклама</span>
+              <span class="ad-slot-caption">300 × 250</span>
+            </div>
+          </div>
+        </aside>
+        <div class="settings-backdrop" x-show="settingsOpen" @click="settingsOpen=false"></div>
+      </div>
+
+      <div class="action-bar">
+        <button class="panel-btn" @click="settingsOpen=true">⚙</button>
+        <button class="panel-btn panel-btn--primary" :disabled="readyImages.length===0" @click="startGenerate()">Создать PDF →</button>
+      </div>
+    </div>
+  </template>
+
+  <!-- RESULT -->
+  <template x-if="!unsupported && view==='result'">
+    <div class="screen-result">
+      <div class="page-stack">
+        <span class="page" style="transform:translate(0,0) rotate(0deg)"></span>
+        <span class="page" style="transform:translate(3px,-3px) rotate(-1.5deg)"></span>
+        <span class="page" style="transform:translate(6px,-6px) rotate(-3deg)"></span>
+        <template x-if="!job.finished"><div class="scan-beam-active"></div></template>
+        <template x-if="job.finished">
+          <div class="stamp">
+            <svg width="46" height="46" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="12" cy="12" r="10"/><path d="m8 12 3 3 5-6"/></svg>
+          </div>
+        </template>
+      </div>
+      <p class="scan-readout" x-text="job.finished ? 'ГОТОВО' : String(job.done).padStart(2,'0')+' / '+String(job.total).padStart(2,'0')"></p>
+      <div>
+        <p class="result-title" x-text="job.finished ? 'PDF готов' : 'Сканируем страницы…'"></p>
+        <p class="result-sub" x-text="job.finished ? (pdfName+' · '+job.total+' стр. · '+pageLabel) : 'обрабатываем по порядку'"></p>
+      </div>
+      <div class="result-actions" x-show="job.finished">
+        <button class="panel-btn" @click="view='grid'">Создать ещё раз</button>
+        <button class="panel-btn" x-show="canSharePdf" @click="sharePdf()">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 12v7a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-7"/><path d="M16 6l-4-4-4 4"/><path d="M12 2v13"/></svg>
+          Поделиться
+        </button>
+        <button class="panel-btn panel-btn--primary" @click="downloadPdf()">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v12m0 0-4-4m4 4 4-4M4 21h16"/></svg>
+          Скачать PDF
+        </button>
+      </div>
+    </div>
+  </template>
+
+  <div class="ad-slot ad-slot--footer">
+    <span class="ad-slot-label">реклама</span>
+    <span class="ad-slot-caption">баннер</span>
+  </div>
+
+</div>
+
+</body>
+</html>

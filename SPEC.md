@@ -31,7 +31,7 @@
 
 - `alpine.esm.js` — реактивность UI
 - `sortable.min.js` — drag-reorder
-- `pdf-lib.min.js` (~700 КБ) — сборка PDF
+- `pdf-lib.esm.min.js` (~520 КБ) — сборка PDF; именно ESM-сборка: module-воркер не поддерживает `importScripts`
 
 **Go (стандартная библиотека, без внешних зависимостей):**
 
@@ -75,7 +75,7 @@ web/
   vendor/
     alpine.esm.js
     sortable.min.js
-    pdf-lib.min.js
+    pdf-lib.esm.min.js
 ```
 
 Заметь: `internal/session`, `internal/imaging`, `internal/pdf`, `internal/heic` из v1.0 — все исчезли. Go-часть — это буквально один файл.
@@ -83,7 +83,7 @@ web/
 ### 5.2 main.go — обязанности
 
 - Флаги: `--host 0.0.0.0`, `--port 8080`, `--dev` (отдавать `web/` с диска вместо `embed.FS`, для живой правки без пересборки).
-- `http.FileServer` поверх `embed.FS`; `Cache-Control: no-cache` для `index.html`, `max-age` для версионированных `vendor/*` (они не меняются между релизами).
+- `http.FileServer` поверх `embed.FS`; `Cache-Control: no-cache` для `index.html`, `max-age` (неделя) для `vendor/*`; правило: vendor-файлы не хешированы по содержимому, поэтому новая версия библиотеки = новое имя файла.
 - При старте — перечислить интерфейсы (`net.Interfaces()`), напечатать все LAN-адреса вида `http://192.168.x.x:8080`.
 - `/healthz` — `200 OK`, для быстрой проверки, что процесс жив.
 - Graceful shutdown по `SIGINT/SIGTERM`.
@@ -167,13 +167,13 @@ web/
 | Этап | Содержание | DoD |
 |---|---|---|
 | 1. Дизайн | ✅ готово — `prototype.html` | — |
-| 2. Чистые функции | `pipeline-math.js`: fit/fill, page-size/DPI, sanitizer, sniff | `node --test` зелёный |
+| 5. Go static server | `main.go`: embed, LAN-адреса, `--dev`, QR — вынесен вперёд ради раннего LAN-доступа с телефона | открывается с телефона по LAN-адресу; `web/` на этом этапе — копия прототипа |
+| 2. Чистые функции | `pipeline-math.js`: fit/fill, page-size/DPI, sanitizer, sniff | ✅ `node --test` зелёный |
 | 3. Canvas-пайплайн | `pipeline.js`: реальный `createImageBitmap` → thumbnail → rotation вместо `addMock()` в прототипе | реальные фото проходят через UI прототипа корректно, поворот совпадает с EXIF; портретное фото с iPhone (EXIF ≠ 1) — в правильной ориентации на реальном iOS Safari |
-| 4. PDF + Worker | `pdf-worker.js`, интеграция `pdf-lib`, реальный прогресс вместо `setTimeout`-симуляции | генерация даёт валидный скачиваемый PDF, счётчик отражает реальный прогресс |
-| 5. Go static server | `main.go`: embed, LAN-адреса, `--dev`, опционально QR | открывается с телефона по LAN-адресу |
+| 4. PDF + Worker | `pdf-worker.js`, интеграция `pdf-lib`, реальный прогресс вместо `setTimeout`-симуляции | ✅ генерация даёт валидный скачиваемый PDF, счётчик отражает реальный прогресс |
 | 6. Полировка | error-состояния (HEIC, повреждённый файл, лимиты), память/revoke, README, Makefile (кросс-компиляция без CGo — теперь тривиальна) | ручная матрица §11 пройдена |
 
-Этапы 2–4 не требуют Go вообще — можно вести разработку и тестировать прямо в браузере (`--dev` или просто открыв `index.html`), Go подключается последним, на этапе 5.
+Этап 5 вынесен сразу после дизайна: сервер не зависит от остального кода, зато даёт LAN-доступ с реального телефона для DoD этапов 3–4 (EXIF-ориентация, память, download). Этапы 2–4 по-прежнему не требуют Go — разработка идёт в браузере через `--dev`.
 
 ## 13. Открытые мелочи
 
